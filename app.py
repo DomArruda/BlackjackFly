@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
-from blackjack import CasinoGame, judge
+from blackjack import CasinoGame, judge, shape_reward
 
 # -----------------------------------------------------------------------------
 # Streamlit App Configuration
@@ -296,8 +296,9 @@ if st.sidebar.button("Train Fly Brain", use_container_width=True):
                 act = agent.select_action(obs, temp=temp)
                 obs, rew, term, trunc, _ = env.step(act)
                 done = term or trunc
-            agent.deliver_dopamine(rew)
-            rewards.append(rew)
+            shaped = shape_reward(rew, obs[0])  # obs[0] after termination = final score
+            agent.deliver_dopamine(shaped)
+            rewards.append(shaped)
 
             if ep in checkpoints:
                 # ponytail: 400-hand greedy evals, ~±2.5% noise — fine for a
@@ -453,8 +454,12 @@ if "training_report" in st.session_state:
     with st.expander("📈 Fly Brain Training Report"):
         st.caption(
             "The fly trained against a standard Gymnasium Blackjack-v1 dealer; the same "
-            "circuit now plays you head-to-head. Basic-strategy baseline for reference: "
-            "~43% wins, avg reward ≈ −0.05."
+            "circuit now plays you head-to-head. Training hands use a shaped dopamine "
+            "signal — win +1, push 0, loss −1 − distance-from-21/21 — so losing at 12 "
+            "hurts far more than losing at 20 and busts are graded automatically; the "
+            "learning curve plots that shaped reward while the metrics below stay on the "
+            "raw ±1 scale. Basic-strategy baseline for reference: ~43% wins, "
+            "avg reward ≈ −0.05."
         )
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Hands Trained", f"{rep['episodes']:,}")

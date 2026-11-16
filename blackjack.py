@@ -69,6 +69,22 @@ def judge(player_total, fly_total):
     return "Push", "Push", f"Push at {player_total}"
 
 
+def shape_reward(outcome, final_score):
+    """Dopamine shaping for a finished Gymnasium Blackjack hand.
+
+    Win +1, push 0, loss -1 - |21 - score|/21: losing close to 21 hurts a
+    little, standing pat on 12 hurts a lot, and busts are graded by the same
+    distance automatically. Pure partial credit (win 1, loss -distance/21)
+    shrinks the dopamine signal enough that the fly converges to always-stand,
+    so the -1 anchor is kept.
+    """
+    if outcome > 0:
+        return 1.0
+    if outcome == 0:
+        return 0.0
+    return -1.0 - abs(21 - final_score) / 21.0
+
+
 if __name__ == "__main__":
     calc = CasinoGame.calc_hand
 
@@ -88,5 +104,14 @@ if __name__ == "__main__":
     shoe = CasinoGame()
     draws = [shoe.draw_card() for _ in range(500)]  # forces at least one reshuffle
     assert all(1 <= r <= 13 for r, _ in draws)
+
+    sr = shape_reward
+    assert sr(1, 20) == 1.0                      # win pays flat
+    assert sr(0, 20) == 0.0                      # push stays neutral
+    assert sr(-1, 20) == -(1 + 1 / 21)           # lost at 20: mild
+    assert sr(-1, 12) == -(1 + 9 / 21)           # passive low stand: harsh
+    assert sr(-1, 23) == -(1 + 2 / 21)           # bust graded automatically
+    assert sr(-1, 12) < sr(-1, 20) < 0           # passive low stand hurts most
+    assert sr(-1, 26) < sr(-1, 22) < 0           # bigger bust hurts more
 
     print("blackjack.py self-check passed.")
