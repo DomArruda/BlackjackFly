@@ -236,33 +236,74 @@ agent.k_sparse = min(agent.n_kc, max(5, int(agent.n_kc * sparsity_ratio)))
 
 st.sidebar.metric("Trained Status", "✅ Pre-Trained" if st.session_state.trained else "⚠️ Untrained Baseline")
 
+
+def greedy_eval(agent, n_hands=2000):
+    """Plays n hands with the deterministic (argmax) Mushroom Body readout vs a dealer."""
+    env = gym.make("Blackjack-v1")
+    wins = pushes = 0
+    rewards = []
+    for _ in range(n_hands):
+        obs, _ = env.reset()
+        rew, done = 0.0, False
+        while not done:
+            action, _ = agent.get_action_deterministic(obs)
+            obs, rew, term, trunc, _ = env.step(action)
+            done = term or trunc
+        rewards.append(rew)
+        if rew > 0:
+            wins += 1
+        elif rew == 0:
+            pushes += 1
+    env.close()
+    return wins / n_hands, pushes / n_hands, float(np.mean(rewards))
+
+
+def build_training_report(agent, rewards):
+    win_rate, push_rate, avg_rew = greedy_eval(agent)
+    k = max(10, len(rewards) // 10)
+    return {
+        "episodes": len(rewards),
+        "win_rate": win_rate,
+        "push_rate": push_rate,
+        "avg_reward": avg_rew,
+        "delta": float(np.mean(rewards[-k:]) - np.mean(rewards[:k])),
+        "curve": rewards,
+    }
+
+
 if st.sidebar.button("Train Fly Brain", use_container_width=True):
     progress_bar = st.sidebar.progress(0.0)
     with st.spinner("Simulating dopaminergic RL with Gymnasium Blackjack-v1..."):
         env = gym.make("Blackjack-v1")
         initial_temp = 0.20
         min_temp = 0.02
+        rewards = []
         for ep in range(1, training_episodes + 1):
             temp = max(min_temp, initial_temp * (1.0 - (ep / training_episodes)))
             obs, _ = env.reset()
-            done = False
+            rew, done = 0.0, False
             while not done:
                 act = agent.select_action(obs, temp=temp)
                 obs, rew, term, trunc, _ = env.step(act)
                 done = term or trunc
             agent.deliver_dopamine(rew)
+            rewards.append(rew)
 
             if ep % (training_episodes // 10) == 0:
                 progress_bar.progress(ep / training_episodes)
 
         env.close()
         st.session_state.trained = True
+        st.session_state.training_report = build_training_report(
+            agent, np.array(rewards, dtype=np.float64)
+        )
     st.sidebar.success(f"Trained on {training_episodes:,} hands!")
 
 if st.sidebar.button("Reset Synapses to Baseline", use_container_width=True):
     agent.W_kc_mbon = connectome_data["W_kc_mbon"].copy()
     agent.eligibility_trace.fill(0.0)
     st.session_state.trained = False
+    st.session_state.pop("training_report", None)
     st.sidebar.info("Synapses restored to baseline anatomical state.")
 
 # -----------------------------------------------------------------------------
@@ -380,6 +421,34 @@ else:
         if st.button("🔄 Deal Next Hand", use_container_width=True):
             start_new_round()
             st.rerun()
+
+# -----------------------------------------------------------------------------
+# Fly Brain Training Report
+# -----------------------------------------------------------------------------
+if "training_report" in st.session_state:
+    rep = st.session_state.training_report
+    with st.expander("📈 Fly Brain Training Report"):
+        st.caption(
+            "The fly trained against a standard Gymnasium Blackjack-v1 dealer; the same "
+            "circuit now plays you head-to-head. Basic-strategy baseline for reference: "
+            "~43% wins, avg reward ≈ −0.05."
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Hands Trained", f"{rep['episodes']:,}")
+        m2.metric("Greedy Win Rate", f"{rep['win_rate'] * 100:.1f}%")
+        m3.metric("Greedy Avg Reward", f"{rep['avg_reward']:+.3f}")
+        m4.metric("Avg Reward Δ (early→late)", f"{rep['delta']:+.3f}")
+
+        w = max(10, rep["episodes"] // 100)
+        curve = np.convolve(rep["curve"], np.ones(w) / w, mode="valid")
+        fig, ax = plt.subplots(figsize=(10, 3))
+        ax.plot(curve, color="#27ae60")
+        ax.axhline(0, color="gray", lw=0.8)
+        ax.set_title(f"Dopaminergic Learning Curve — rolling {w}-hand mean reward")
+        ax.set_xlabel("Episode")
+        ax.set_ylabel("Mean Reward")
+        st.pyplot(fig)
+        plt.close(fig)
 
 # -----------------------------------------------------------------------------
 # Biological Diagnostic Expander
