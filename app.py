@@ -258,7 +258,7 @@ def greedy_eval(agent, n_hands=2000):
     return wins / n_hands, pushes / n_hands, float(np.mean(rewards))
 
 
-def build_training_report(agent, rewards):
+def build_training_report(agent, rewards, best_ep=0):
     win_rate, push_rate, avg_rew = greedy_eval(agent)
     k = max(10, len(rewards) // 10)
     return {
@@ -267,6 +267,7 @@ def build_training_report(agent, rewards):
         "push_rate": push_rate,
         "avg_reward": avg_rew,
         "delta": float(np.mean(rewards[-k:]) - np.mean(rewards[:k])),
+        "best_episode": best_ep,
         "curve": rewards,
     }
 
@@ -278,8 +279,17 @@ if st.sidebar.button("Train Fly Brain", use_container_width=True):
         initial_temp = 0.20
         min_temp = 0.02
         rewards = []
+        # Checkpoints: dense early (reward typically peaks in the first few
+        # hundred hands), then every 4k. Best greedy policy is snapshotted.
+        checkpoints = {100, 250, 500, 1000, 2000, training_episodes} | set(
+            range(4000, training_episodes, 4000)
+        )
+        best_win, best_ep, best_W = -1.0, 0, None
         for ep in range(1, training_episodes + 1):
-            temp = max(min_temp, initial_temp * (1.0 - (ep / training_episodes)))
+            progress = ep / training_episodes
+            temp = max(min_temp, initial_temp * (1.0 - progress))
+            # Anneal dopamine like temperature: consolidate late instead of drifting
+            agent.lr = learning_rate * max(0.1, 1.0 - progress)
             obs, _ = env.reset()
             rew, done = 0.0, False
             while not done:
@@ -289,15 +299,28 @@ if st.sidebar.button("Train Fly Brain", use_container_width=True):
             agent.deliver_dopamine(rew)
             rewards.append(rew)
 
+            if ep in checkpoints:
+                # ponytail: 400-hand greedy evals, ~±2.5% noise — fine for a
+                # demo; widen the sample for serious tuning
+                win_rate, _, _ = greedy_eval(agent, 400)
+                if win_rate > best_win:
+                    best_win, best_ep, best_W = win_rate, ep, agent.W_kc_mbon.copy()
+
             if ep % (training_episodes // 10) == 0:
-                progress_bar.progress(ep / training_episodes)
+                progress_bar.progress(progress)
 
         env.close()
+        agent.lr = learning_rate
+        if best_W is not None:
+            agent.W_kc_mbon = best_W  # end training at the measured peak
         st.session_state.trained = True
         st.session_state.training_report = build_training_report(
-            agent, np.array(rewards, dtype=np.float64)
+            agent, np.array(rewards, dtype=np.float64), best_ep=best_ep
         )
-    st.sidebar.success(f"Trained on {training_episodes:,} hands!")
+    st.sidebar.success(
+        f"Trained on {training_episodes:,} hands! "
+        f"(best greedy policy from episode {best_ep:,})"
+    )
 
 if st.sidebar.button("Reset Synapses to Baseline", use_container_width=True):
     agent.W_kc_mbon = connectome_data["W_kc_mbon"].copy()
@@ -433,18 +456,20 @@ if "training_report" in st.session_state:
             "circuit now plays you head-to-head. Basic-strategy baseline for reference: "
             "~43% wins, avg reward ≈ −0.05."
         )
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Hands Trained", f"{rep['episodes']:,}")
         m2.metric("Greedy Win Rate", f"{rep['win_rate'] * 100:.1f}%")
         m3.metric("Greedy Avg Reward", f"{rep['avg_reward']:+.3f}")
         m4.metric("Avg Reward Δ (early→late)", f"{rep['delta']:+.3f}")
+        m5.metric("Peak Snapshot", f"Ep. {rep['best_episode']:,}")
 
         w = max(10, rep["episodes"] // 100)
         curve = np.convolve(rep["curve"], np.ones(w) / w, mode="valid")
         fig, ax = plt.subplots(figsize=(10, 3))
         ax.plot(curve, color="#27ae60")
         ax.axhline(0, color="gray", lw=0.8)
-        ax.set_title(f"Dopaminergic Learning Curve — rolling {w}-hand mean reward")
+        ax.axvline(rep["best_episode"], color="#e2b755", lw=1.5, ls="--")
+        ax.set_title(f"Dopaminergic Learning Curve — rolling {w}-hand mean reward (dashed: peak snapshot)")
         ax.set_xlabel("Episode")
         ax.set_ylabel("Mean Reward")
         st.pyplot(fig)
