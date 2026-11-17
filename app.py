@@ -455,10 +455,10 @@ if "training_report" in st.session_state:
         st.caption(
             "The fly trained against a standard Gymnasium Blackjack-v1 dealer; the same "
             "circuit now plays you head-to-head. Training hands use a shaped dopamine "
-            "signal — win +1, push 0, loss −1 − distance-from-21/21 — so losing at 12 "
-            "hurts far more than losing at 20 and busts are graded automatically; the "
-            "learning curve plots that shaped reward while the metrics below stay on the "
-            "raw ±1 scale. Basic-strategy baseline for reference: ~43% wins, "
+            "signal — win +1, push 0, loss −3 × distance-from-21/21 — so standing pat on "
+            "a low hand hurts far more than a small bust, and passivity is punished "
+            "hardest; the learning curve plots that shaped reward while the metrics below "
+            "stay on the raw ±1 scale. Basic-strategy baseline for reference: ~43% wins, "
             "avg reward ≈ −0.05."
         )
         m1, m2, m3, m4, m5 = st.columns(5)
